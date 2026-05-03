@@ -1,16 +1,22 @@
 import { Injectable } from '@nestjs/common';
 import { google } from 'googleapis';
 import { Logger } from '@nestjs/common';
+import addressparser from 'addressparser';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class GmailService {
   private gmail;
 
-  constructor() {
-    const auth = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
+  constructor(private config: ConfigService) {
+    const clientId = this.config.get<string>('gmailClientId');
+    const clientSecret = this.config.get<string>('gmailClientSecret');
+    const refreshToken = this.config.get<string>('gmailRefreshToken');
+
+    const auth = new google.auth.OAuth2(clientId, clientSecret);
 
     auth.setCredentials({
-      refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+      refresh_token: refreshToken,
     });
 
     this.gmail = google.gmail({ version: 'v1', auth });
@@ -31,12 +37,14 @@ export class GmailService {
           continue;
         }
         try {
-          const content = await this.getEmailContent(msg.id);
+          const raw = await this.getEmailContent(msg.id);
 
-          if (content) {
+          if (raw) {
             emails.push({
               id: msg.id,
-              content,
+              content: raw.content,
+              from: raw.from,
+              subject: raw.subject,
             });
           }
         } catch (error) {
@@ -59,7 +67,7 @@ export class GmailService {
 
       const res = await this.gmail.users.messages.list({
         userId: 'me',
-        q: 'is:unread -label:AI/PROCESSED',
+        q: 'is:unread -label:AI/PROCESSED -label:AI/REVIEW',
         maxResults: 5,
       });
 
@@ -79,14 +87,26 @@ export class GmailService {
         id: messageId,
       });
 
-      const body = res.data.payload?.body?.data;
+      const payload = res.data.payload;
+      const headers = payload?.headers ?? [];
 
-      if (!body) {
+      const getHeader = (name: string) => headers.find(h => h.name === name)?.value ?? '';
+
+      const fromRaw = getHeader('From');
+      const subject = getHeader('Subject');
+
+      const parsed = addressparser(fromRaw);
+      const from = parsed[0]?.address ?? '';
+
+      const bodyData = payload?.parts?.[0]?.body?.data || payload?.body?.data || '';
+
+      if (!bodyData) {
         this.logger.warn({ messageId }, 'Empty email body');
         return '';
       }
 
-      return Buffer.from(body, 'base64').toString('utf-8');
+      const content = Buffer.from(bodyData, 'base64').toString('utf-8');
+      return { content, from, subject };
     } catch (error) {
       this.logger.error({ error, messageId }, 'Failed to fetch email content');
       return '';
@@ -170,9 +190,36 @@ export class GmailService {
     }
 
     const newId = await this.createLabel(labelName);
-
     this.labelCache[labelName] = newId;
 
     return newId;
+  }
+
+  async createDraft(to: string, subject: string, body: string) {
+    try {
+      const message = [`To: ${to}`, `Subject: Re: ${subject}`, '', body].join('\n');
+
+      const encodedMessage = Buffer.from(message)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+
+      const res = await this.gmail.users.drafts.create({
+        userId: 'me',
+        requestBody: {
+          message: {
+            raw: encodedMessage,
+          },
+        },
+      });
+
+      this.logger.log({ draftId: res.data.id }, 'Draft created');
+
+      return res.data;
+    } catch (error) {
+      this.logger.error({ error }, 'Failed to create draft');
+      throw error;
+    }
   }
 }

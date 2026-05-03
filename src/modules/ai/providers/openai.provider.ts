@@ -3,14 +3,15 @@ import OpenAI from 'openai';
 import { AiProvider } from './ai.provider';
 import { Logger } from '@nestjs/common';
 import { LABELS, LabelType } from 'src/common/constants/labels';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class OpenAiProvider implements AiProvider {
   private client: OpenAI;
 
-  constructor() {
+  constructor(private config: ConfigService) {
     this.client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
+      apiKey: this.config.get<string>('openaiApiKey'),
     });
   }
   private readonly logger = new Logger(OpenAiProvider.name);
@@ -84,13 +85,21 @@ Rules:
             model: 'gpt-4.1-mini',
             messages: [
               {
-                role: 'user',
+                role: 'system',
                 content: `
-Reply professionally and concisely.
+You are a professional assistant.
 
-Email:
-${content}
-                `,
+Write a concise, polite and clear reply.
+
+Rules:
+- Be professional
+- Be short
+- No unnecessary text
+        `,
+              },
+              {
+                role: 'user',
+                content,
               },
             ],
           }),

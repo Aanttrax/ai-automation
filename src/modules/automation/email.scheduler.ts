@@ -27,10 +27,15 @@ export class EmailScheduler {
         }
         const label = await this.aiService.classify(email.content);
         await this.gmailService.addLabel(email.id, label);
+
+        if (label === 'AI/IMPORTANT' || label === 'AI/JOBS') {
+          const reply = await this.aiService.reply(email.content);
+          await this.gmailService.createDraft(email.from, email.subject, reply);
+          await this.gmailService.addLabel(email.id, 'AI/REVIEW');
+        }
+
         await this.gmailService.addLabel(email.id, 'AI/PROCESSED');
         this.logger.log({ emailId: email.id, label });
-
-        // aquí luego agregamos reply automático
       }
     } catch (error) {
       this.logger.error('Scheduler failed', error);
