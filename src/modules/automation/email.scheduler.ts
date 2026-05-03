@@ -18,16 +18,17 @@ export class EmailScheduler {
 
     try {
       const emails = await this.gmailService.fetchUnreadEmails();
-
       this.logger.log(`Emails found: ${emails.length}`);
 
       for (const email of emails) {
-        const category = await this.aiService.classify(email.content);
-
-        this.logger.log({
-          emailId: email.id,
-          category,
-        });
+        if (!email?.id || !email?.content) {
+          this.logger.warn('Invalid email skipped');
+          continue;
+        }
+        const label = await this.aiService.classify(email.content);
+        await this.gmailService.addLabel(email.id, label);
+        await this.gmailService.addLabel(email.id, 'AI/PROCESSED');
+        this.logger.log({ emailId: email.id, label });
 
         // aquí luego agregamos reply automático
       }

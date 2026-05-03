@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import OpenAI from 'openai';
 import { AiProvider } from './ai.provider';
 import { Logger } from '@nestjs/common';
+import { LABELS, LabelType } from 'src/common/constants/labels';
 
 @Injectable()
 export class OpenAiProvider implements AiProvider {
@@ -30,7 +31,7 @@ export class OpenAiProvider implements AiProvider {
     }
   }
 
-  async classifyEmail(content: string): Promise<string> {
+  async classifyEmail(content: string): Promise<LabelType> {
     return this.retry(async () => {
       try {
         const res: any = await Promise.race([
@@ -38,27 +39,36 @@ export class OpenAiProvider implements AiProvider {
             model: 'gpt-4.1-mini',
             messages: [
               {
-                role: 'user',
+                role: 'system',
                 content: `
-Classify this email into:
-work, support, spam, interview
+You are an email classifier.
 
-Email:
-${content}
-                `,
+You MUST choose ONLY one label from this list:
+
+${LABELS.join('\n')}
+
+Rules:
+- Return ONLY the label
+- No explanations
+- No extra text
+      `,
+              },
+              {
+                role: 'user',
+                content: content,
               },
             ],
           }),
           this.timeout(5000),
         ]);
 
-        const result = res?.choices?.[0]?.message?.content;
+        const label = res?.choices?.[0]?.message?.content.trim() as LabelType;
 
-        if (!result) {
-          throw new Error('Empty response');
+        if (!LABELS.includes(label)) {
+          return 'AI/OTHER';
         }
 
-        return result;
+        return label;
       } catch (error) {
         this.logger.error({ error, content }, 'Error classifying email');
         throw new Error('AI classification failed');

@@ -16,6 +16,7 @@ export class GmailService {
     this.gmail = google.gmail({ version: 'v1', auth });
   }
 
+  private labelCache: Record<string, string> = {};
   private readonly logger = new Logger(GmailService.name);
 
   async fetchUnreadEmails() {
@@ -58,7 +59,7 @@ export class GmailService {
 
       const res = await this.gmail.users.messages.list({
         userId: 'me',
-        q: 'is:unread',
+        q: 'is:unread -label:AI/PROCESSED',
         maxResults: 5,
       });
 
@@ -90,5 +91,88 @@ export class GmailService {
       this.logger.error({ error, messageId }, 'Failed to fetch email content');
       return '';
     }
+  }
+
+  async addLabel(messageId: string, label: string) {
+    try {
+      const labelId = await this.resolveLabelId(label);
+      await this.gmail.users.messages.modify({
+        userId: 'me',
+        id: messageId,
+        requestBody: {
+          addLabelIds: [labelId],
+        },
+      });
+
+      this.logger.log({ messageId, label }, 'Label applied');
+    } catch (error) {
+      this.logger.error({ messageId, label, error: error?.message }, 'Failed to apply label');
+      throw error;
+    }
+  }
+
+  async getLabels(): Promise<Record<string, string>> {
+    try {
+      const res = await this.gmail.users.labels.list({
+        userId: 'me',
+      });
+
+      const labels = res.data.labels ?? [];
+      const map: Record<string, string> = {};
+
+      for (const label of labels) {
+        if (label.name && label.id) {
+          map[label.name] = label.id;
+        }
+      }
+
+      this.logger.log({ count: labels.length }, 'Labels fetched');
+
+      return map;
+    } catch (error) {
+      this.logger.error({ error }, 'Failed to fetch labels');
+      throw error;
+    }
+  }
+
+  async createLabel(name: string): Promise<string> {
+    try {
+      const res = await this.gmail.users.labels.create({
+        userId: 'me',
+        requestBody: {
+          name,
+          labelListVisibility: 'labelShow',
+          messageListVisibility: 'show',
+        },
+      });
+
+      const id = res.data.id!;
+
+      this.logger.log({ name, id }, 'Label created');
+
+      return id;
+    } catch (error) {
+      this.logger.error({ name, error }, 'Failed to create label');
+      throw error;
+    }
+  }
+
+  async resolveLabelId(labelName: string): Promise<string> {
+    if (this.labelCache[labelName]) {
+      return this.labelCache[labelName];
+    }
+
+    const labels = await this.getLabels();
+
+    if (labels[labelName]) {
+      this.labelCache = labels;
+      return labels[labelName];
+    }
+
+    const newId = await this.createLabel(labelName);
+
+    this.labelCache[labelName] = newId;
+
+    return newId;
   }
 }
